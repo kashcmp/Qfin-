@@ -1,2 +1,2 @@
 # Qfin-
-Repository of small fin pet projects to test and understand concepts
+Repository of small qfin pet projects to test and understand concepts
