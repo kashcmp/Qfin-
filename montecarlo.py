@@ -9,12 +9,12 @@ T = 1.0
 steps = int(T * 252)
 dt = 1/steps
 
-rfr = 0.08
+rfr = 0.0525
 n_sim = int(1e5)
-initial = 295.48
+initial = 778.52
 drift = rfr 
-volatility = .010625
-strike_price = 130
+volatility = 0.272
+strike_price = 540
 
 '''
 3d paths with n-sim varied aswell
@@ -49,7 +49,7 @@ Z1 = np.random.normal(0,1,n_sim)
 S = initial * np.exp((drift - (volatility**2)/2) * T + volatility * Z1) - strike_price
 S = np.where(S < 0,0,S)
 
-results = S
+results = initial * np.exp((drift - (volatility**2)/2) * T + volatility * Z1)
 coverg_results = S * np.exp(-rfr* T)
 mu = np.mean(S)
 
