@@ -9,13 +9,12 @@ from pyspark.sql import SparkSession
 import time
 import requests
 
-
-# program to receive parquet files from theta client and save them
 '''
-client = ThetaClient(email="danny.kashanin@gmail.com", password="siccyk-Wajxop-3pedxu",api_key="td1_prod_4dbb3a30d3394e63affc48fb98c68370")
+# program to receive parquet files from theta client and save them
+client = ThetaClient()
 
-start_date=date(2025, 10, 7)
-end_date=date(2026, 10, 7)
+start_date=date(2026, 10, 6)
+end_date=date(2026, 11, 6)
 steps = 5
 
 using = start_date
@@ -40,20 +39,20 @@ while using <= end_date:
 
 '''
 
-
+'''
 
 # program to read in all parquet files and create two new dataframe of calls and puts with only necessary data
-'''
+
 # Initialize a Spark session
 spark = SparkSession.builder.appName("SparkExample").getOrCreate()
 
 
-start_date=date(2025, 10, 7)
+start_date=date(2023, 10, 7)
 end_date=date(2026, 10, 7)
 steps = 5
 using = start_date
 
-col_names =  ['Mid', 'Strike', 'TTE(years)', 'Rfr','Initial',"Created"]
+col_names =  ['Bid', 'Ask', 'Mid', 'Strike', 'TTE(years)', 'Rfr','Initial',"Created","Expiration"]
 dataset_c = pd.DataFrame(columns = col_names)
 dataset_p  = pd.DataFrame(columns = col_names)
 
@@ -65,24 +64,31 @@ while using <= end_date:
 
     df["created"] = pd.to_datetime(df["created"]).dt.date
     df["expiration"] = pd.to_datetime(df["expiration"]).dt.date
+    df["last_trade"] = pd.to_datetime(df["last_trade"]).dt.date
 
     calls = df[df["right"] == "CALL"]
     puts =  df[df["right"] == "PUT"]
 
     c_mids = np.array((calls["bid"] + calls["ask"])/2)
+    c_bids = np.array(calls["bid"])
+    c_asks = np.array(calls["ask"])
     c_strikes = np.array(calls["strike"])
     p_mids = np.array((puts["bid"] + puts["ask"])/2)
+    p_bids = np.array(puts["bid"])
+    p_asks = np.array(puts["ask"])
     p_strikes = np.array(puts["strike"])
 
-    c_tte = (calls["expiration"] - calls["created"])
-    p_tte = puts["expiration"] - puts["created"]
+    c_tte = (calls["expiration"] - calls["last_trade"])
+    p_tte = puts["expiration"] - puts["last_trade"]
     c_tte  = [i.days/365 for i in np.array(c_tte)]
     p_tte  = [i.days/365 for i in np.array(p_tte)]
 
+    expc = calls["expiration"]
+    expp = puts["expiration"]
 
-    new_row = pd.DataFrame({'Mid':c_mids, 'Strike':c_strikes, 'TTE(years)':c_tte, 'Rfr':np.zeros((c_mids.shape)),'Initial':np.zeros((c_mids.shape)),"Created":calls["created"]})
+    new_row = pd.DataFrame({'Bid':c_bids, 'Ask':c_asks, 'Mid':c_mids, 'Strike':c_strikes, 'TTE(years)':c_tte, 'Rfr':np.zeros((c_mids.shape)),'Initial':np.zeros((c_mids.shape)),"Created":calls["created"],"Expiration" : expc})
     dataset_c = pd.concat([dataset_c,new_row], ignore_index=True)
-    new_row = pd.DataFrame({'Mid':p_mids, 'Strike':p_strikes, 'TTE(years)':p_tte, 'Rfr':np.zeros((p_mids.shape)),'Initial':np.zeros((p_mids.shape)),"Created":puts["created"]})
+    new_row = pd.DataFrame({'Bid':p_bids, 'Ask':p_asks, 'Mid':p_mids, 'Strike':p_strikes, 'TTE(years)':p_tte, 'Rfr':np.zeros((p_mids.shape)),'Initial':np.zeros((p_mids.shape)),"Created":puts["created"],"Expiration" : expp})
     dataset_p = pd.concat([dataset_p,new_row], ignore_index=True)
 
     using = batch_end + timedelta(days=1)
@@ -90,20 +96,20 @@ while using <= end_date:
 
 dataset_c.to_csv("calls.csv")
 dataset_p.to_csv("puts.csv")
-'''
 
+'''
 
 
 #program to query FRED for 1month bond tields over same period as before
 '''
-api_key = "153fdee52837f80203df12a4b81352ae"
+api_key = ""
 
 base = "https://api.stlouisfed.org/fred"
 end = "/series/observations"
 
 series_id = 'DGS1MO'
-startdate = '2025-10-06'
-endate = "2026-10-07"
+startdate = '2023-10-06'
+endate = "2026-11-05"
 ts_freq = 'q'
 ts_units = 'pc1'
 
@@ -123,15 +129,21 @@ if response.status_code == 200:
     data["date"] = pd.to_datetime(data["date"])
     data['value'] = data['value']
 
-    data.to_csv("rfr.csv")
+    data.to_csv("rfr.csv",index=False)
 else:
     print("Data Retrieval Failed Status Code : ",response.status_code)
+
 '''
-
 #yfinfnace for underlying asset close
-
-startdate = '2025-10-05'
-endate = "2026-10-09"
+'''
+startdate = '2023-10-05'
+endate = "2026-11-05"
 
 df = yf.download("SPY",start = startdate,end = endate,interval = "1d")
 df.to_csv("underlying.csv")
+
+'''
+
+        
+        
+       
