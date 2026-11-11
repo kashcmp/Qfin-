@@ -10,7 +10,7 @@ steps = int(T * 252)
 dt = 1/steps
 
 rfr = 0.0525
-n_sim = int(1e5)
+n_sim = int(1e8)
 initial = 778.52
 drift = rfr 
 volatility = 0.272
@@ -55,8 +55,8 @@ mu = np.mean(S)
 
 prediciton = mu * np.exp(-rfr*T)
 
-print(f"Monte Carlo Prediction for European Call Option Price: {prediciton}")
-    
+print(f"Monte Carlo Prediction for European Call Option Price: {prediciton} +- {np.std(S*  np.exp(-rfr*T)) }")
+
 
 fig = make_subplots(rows=3, 
                     cols=1,
@@ -71,7 +71,7 @@ d2 = d1 - volatility * np.sqrt(T)
 
 c = initial * norm.cdf(d1) - strike_price * np.exp(-rfr*T) * norm.cdf(d2)
 print(f"Black-Scholes Prediction for European Call Option Price: {c}")
-
+exit()
 #-----------------------------------------------------------------------------
 # Graphing
 nbins = 100
