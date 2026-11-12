@@ -363,8 +363,8 @@ def dayoftheweek(x):
 
 
 
-calls = pd.read_csv("checker.csv")
-Calls = pd.read_csv("wider.csv")
+calls = pd.read_csv("../CSVs/checker.csv")
+Calls = pd.read_csv("../CSVs/wider.csv")
 print(len(calls))
 #calls = pd.read_csv("checker.csv")
 
@@ -487,6 +487,7 @@ epsilon_mean = np.zeros((epsilon.shape))
 
 distance = np.ones((IVs.shape))
 move = np.ones((IVs.shape))
+half_life = np.ones((IVs.shape))
 
 for i in range(IVs.shape[1]):
 
@@ -503,6 +504,7 @@ for i in range(IVs.shape[1]):
         std = IV_rolling_std[j,i]
         distance[j, i] = ((IVs[j, i] - thetas[j,i]) / std if std > 0 else 0.0)
         move[j,i] = np.nan if np.isnan(thetas[j,i]) else (1-IVs[j, i])*(thetas[j,i] - IVs[j,i])
+        half_life[j,i] = np.log(2)/kappas[j,i]
 
 epsilon_mean = np.roll(epsilon_mean,5)
 epsilon = np.roll(epsilon,-5)
@@ -542,8 +544,9 @@ def losses(z,weights = True):
     s2 = np.argwhere((z[2] < distance) & (distance < z[3]))
     s3 = np.argwhere((z[4] < epsilon) & (epsilon < z[5]))
     s4 = (np.argwhere(move < 0))
+    s5 = np.argwhere((z[6] < half_life) & (half_life < z[7]))
 
-    indices = intersect2D(intersect2D(intersect2D(s1,s2),s4),s3)
+    indices = intersect2D(intersect2D(intersect2D(intersect2D(s1,s2),s4),s3),s5)
     
     date_moneyness_signal = []
     p = []
@@ -579,7 +582,7 @@ def losses(z,weights = True):
         if not(trade_t5.empty):
             days = 0
 
-            volume  = np.min([40,trade["bVolume"].values[0]])
+            volume  = np.min([5,trade["bVolume"].values[0]])
             result = trade["Bid"].values[0] * volume - trade_t5["Ask"].values[0] * volume + (trade_t5["Initial"].values[0] - trade["Initial"].values[0]) * trade["d1"].values[0] * volume * 100
             delta = trade["d1"].values[0]
             add = 0
@@ -611,9 +614,10 @@ def losses(z,weights = True):
 
             if result > 0:
                 p.append(result)
+                #print(kappas[x,y],"win")
             if result < 0:
                 l.append(result)
-
+                #print(kappas[x,y],"loss")
         #print(i)
         #print(result)
 
@@ -646,9 +650,10 @@ z9 = [ 1.83602839,  3.69698885,  0.09768046,  2.13688028, -0.06249926,  0.782589
 z10 = [1.82890239,  2.08294328,  0.29800668,  2.1520985,  -2.23436803,  0.99544411]
 
 
-z11 = [ 1.84471616,  2.26367286,  1.25858919,  3.83635251, -0.04167325,  3.36858114] # final params value
-
-for i in [z11]:
+z11 = [ 1.84471616,  2.26367286,  1.25858919,  3.83635251, -0.04167325,  3.36858114,0.75433959,  3.37081815] # final params value
+z12 = [ 1.63294105,  2.41734377,  0.72374093,  3.38157722, -1.51984944, 3.60349046,
+  0.75433959,  3.37081815]
+for i in [z11,z12]:
     m_return,pfolio = losses(i,weights=False)
     #[print(i) for i in pfolio["value"]]
     print(m_return)
@@ -701,18 +706,20 @@ exit()
 
 
 def objective(z):
-    z1_low, z1_high, z2_low, z2_high, z3_low, z3_high = z
+    z1_low, z1_high, z2_low, z2_high, z3_low, z3_high,z4_low,z4_high = z
     pnl = []
     neg = []
     if not (z1_low < z1_high and
             z2_low < z2_high and
-            z3_low < z3_high):
+            z3_low < z3_high and 
+            z4_low < z4_high):
         return 1e6
 
     mask = (
         (z[0] < IV_z) & (IV_z < z[1]) &
         (z[2] < distance) & (distance < z[3]) &
         (z[4] < epsilon) & (epsilon < z[5]) &
+        (z[6] < half_life) & (half_life < z[7]) & 
         (move < 0)
     )
 
@@ -754,20 +761,21 @@ def objective(z):
     if len(pnl) < 30:
         return 1e6
 
-    return -np.sum(pnl) + 50 * len(neg)
+    return -np.sum(pnl) + 40 * len(neg)
 
 bounds = [
     (1, 4), (1, 5),       # IV_z lower and upper
     (0, 3), (1, 5),       # distance lower and upper
-    (-3, 2), (-1, 4)      # historical epsilon Z-score bounds
+    (-3, 2), (-1, 4),      # historical epsilon Z-score bounds
+    (0,1),(0,5)
 ]
 def show_progress(xk,b):
     print("Current x:", xk,b)
 res = differential_evolution(
     objective,
     bounds,
-    popsize=20,
-    maxiter=200,
+    popsize=15,
+    maxiter=300,
     seed=42,
     polish=False,
     callback = show_progress
