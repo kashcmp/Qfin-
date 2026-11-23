@@ -13,7 +13,8 @@ from scipy.stats import norm
 from scipy.optimize import brentq
 import yfinance as yf
 from scipy.optimize import differential_evolution
-
+from xgboost import XGBRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 '''
 spark = SparkSession.builder.appName("SparkExample").getOrCreate()
 
@@ -72,7 +73,7 @@ calls = dataset_c
 
 #puts = dataset_p
 
-rfr = pd.read_csv("rfr.csv")
+rfr = pd.read_csv("../CSVs/rfr.csv")
 rfr = rfr.drop(columns = ["realtime_start","realtime_end"])
 
 for i in range(len(rfr["value"])):
@@ -83,7 +84,7 @@ rfr["date"] = pd.to_datetime(rfr["date"])
 rfr = rfr.set_index("date")
 calls["Created"] = pd.to_datetime(calls["Created"])
 
-underlying = pd.read_csv("underlying.csv")
+underlying = pd.read_csv("../CSVs/underlying.csv")
 
 calls["Rfr"] = calls["Created"].map(rfr["value"])
 
@@ -129,19 +130,18 @@ y24 = date(2024, 1, 1)
 y25 = date(2025, 1, 1)
 y26 = date(2026, 1, 1)
 
-Calls = calls.copy()
-tte = 14
-ranges = 6.5
-calls = calls[calls["TTE(years)"] <= (tte+ranges)/365]
-calls = calls[(tte - ranges)/365 <= calls["TTE(years)"]]
-
-calls = calls.reset_index(drop=True)
 calls["Rel Price"] = calls["Strike"]/calls["Initial"]
 calls["Rel Price"] = calls["Rel Price"].round(4)
 
-calls= calls[calls["Rel Price"]<=1.055]
-calls = calls[calls["Rel Price"] >= 0.945]
-calls["Rel Price"] = calls["Rel Price"].round(3)
+tte = 14
+ranges = 6.5
+calls = calls[calls["TTE(years)"] <= (tte+ranges)/365]
+
+
+calls = calls.reset_index(drop=True)
+
+
+
 calls = calls.sort_values(by = ["Rel Price","Created","TTE(years)"])
 
 c23 = calls[pd.to_datetime(calls["Created"]).dt.date<= y23 + one_year]
@@ -247,6 +247,8 @@ for df in clist:
     ) / (sigma * np.sqrt(T))
 
     df["d1"] = np.exp(float(-divs[counter])*T) * norm.cdf(d1)
+    df["vega"] = S * np.exp(-divs[counter]*T) *np.sqrt(T)*norm.pdf(d1)/100
+    df["Gamma"] = np.exp(float(-divs[counter])*T) * norm.pdf(d1) / (S*sigma*np.sqrt(T))
 
     counter += 1
 
@@ -279,6 +281,7 @@ for df in plist:
     ) / (sigma * np.sqrt(T))
 
     df["d1"] = np.exp(-divs[counter]*T) * (norm.cdf(d1)-1)
+    df["vega"] = S * np.sqrt(T)*norm.pdf(d1)/100
 
     counter += 1
 '''
@@ -290,11 +293,17 @@ clist = [c23,c24,c25,c26]
 #puts = pd.concat(plist)
 calls = pd.concat(clist)
 
+
+Calls = calls.copy()
+calls = calls[(tte - ranges)/365 <= calls["TTE(years)"]]
+calls= calls[calls["Rel Price"]<=1.055]
+calls = calls[calls["Rel Price"] >= 0.945]
+calls["Rel Price"] = calls["Rel Price"].round(3)
 calls["K"] = np.log(pd.to_numeric(calls["Initial"])/pd.to_numeric(calls["Forward Price"]))
 #puts["K"] = np.log(puts["Strike"]/puts["Forward Price"])
 
 
-underlying = pd.read_csv("underlying.csv")
+underlying = pd.read_csv("../CSVs/underlying.csv")
 underlying = underlying.set_index("Price")
 
 close = underlying["Close"][2:].astype(float)
@@ -319,7 +328,7 @@ for i, (pos, n) in enumerate(zip(calls_positions, tte_days)):
         # n trading-day returns starting at the first trading day on/after Created
         r = log_returns.iloc[pos + 1 : pos + n + 1].dropna().to_numpy()
         if r.size:
-            P_RVs[i] = np.std(r) * np.sqrt(252)
+            C_RVs[i] = np.std(r) * np.sqrt(252)
 '''
 '''
 for i, (pos, n) in enumerate(zip(puts_positions, tte_days)):
@@ -331,7 +340,6 @@ for i, (pos, n) in enumerate(zip(puts_positions, tte_days)):
         if r.size:
             P_RVs[i] = np.std(r) * np.sqrt(252)
 '''
-
 '''
 calls["RV"] = C_RVs
 #puts["RV"] = P_RVs
@@ -344,41 +352,48 @@ calls["TTE(years)"] = calls["TTE(years)"]*365
 calls["TTE(years)"] = calls["TTE(years)"].round(0)
 
 
-calls.to_csv("checker.csv",index = False)
-Calls.to_csv("wider.csv",index=False)
-exit()
+calls.to_csv("../CSVs/checker.csv",index = False)
+Calls.to_csv("../CSVs/wider.csv",index=False)
+
 '''
-def dayoftheweek(x):
-    finder = pd.Timestamp(x)
-    reference = pd.Timestamp("2026-11-10") # Tuesday
-
-    ref_day = 2
-    diff = (reference-finder).days
-    modulo = diff % 7
-    l = [7,1,2,3,4,5,6]
-
-    return (l[ref_day - modulo])
-
 
 
 
 
 calls = pd.read_csv("../CSVs/checker.csv")
 Calls = pd.read_csv("../CSVs/wider.csv")
-print(len(calls))
+Calls["TTE(years)"] = (Calls["TTE(years)"]*365).round(0)
 #calls = pd.read_csv("checker.csv")
 
 
 dates = pd.Series(calls.sort_values(by = ["Expiration"])["Expiration"]).unique()
-print(len(dates))
 moneyness = pd.Series(calls["Rel Price"].round(3)).unique()[1:-1]
 
 
-tte_14day = np.zeros((moneyness.size,dates.size))
+tte_14day = np.full((moneyness.size,dates.size), np.nan)
+stock_momementum = np.full((dates.size), np.nan)
+return_momementum = np.full((dates.size), np.nan)
+stock_z = np.full((dates.size), np.nan)
+return_z = np.full((dates.size), np.nan)
+
+for x,y in enumerate(dates):
+
+    sub_calls = calls[calls["Expiration"] == y]
+    stock_momementum[x] = sub_calls["Initial"].values[0]
+    return_momementum[x] = sub_calls["Returns"].values[0]
+
+for x,y in enumerate(stock_momementum):
+    stock_window = stock_momementum[max(0, x - 100):x + 1]
+    return_window = return_momementum[max(0, x - 100):x + 1]
+    stock_z[x] = (y - np.mean(stock_window))/np.std(stock_window)
+    return_z[x] = (return_momementum[x] - np.mean(return_window))/np.std(return_window)
 
 over_index = 0
 for i in moneyness:
-    sub_calls = calls[calls["Rel Price"] == i]
+    tolerance = 0.003
+
+    sub_calls = calls[(calls["Rel Price"] >= i - tolerance) &(calls["Rel Price"] <= i + tolerance)]
+    #sub_calls = calls[calls["Rel Price"] == i]
     index = 0
 
     for j in dates:
@@ -386,28 +401,29 @@ for i in moneyness:
 
         z = sub_sub_calls[["Created","Expiration","Strike"]]
         df = sub_sub_calls[~z.duplicated(keep="first")]
-        
+
+
+        sub_sub_calls = sub_sub_calls[sub_sub_calls["TTE(years)"] > 13]
         x = sub_sub_calls["TTE(years)"]
         y = sub_sub_calls["IV"]
-        try:
 
-            if len(x) > 1:
-                z = np.polyfit(x,y,1)
-                z = np.poly1d(z)
+        fourteen = sub_sub_calls[sub_sub_calls["TTE(years)"] == 14]
+            
 
-                
-                if z(14) <= 0:
-                    tte_14day[over_index,index] = np.nan
-                else:
-                    tte_14day[over_index,index] = z(14)
-            elif len(x) == 1 and x.values[0] == 14:
-                tte_14day[over_index,index] = y
+        if not(fourteen.empty):
+            tte_14day[over_index,index] = fourteen["IV"].values[0]
+        elif len(x) > 1:
+            z = np.polyfit(x,y,1)
+            z = np.poly1d(z)
 
-            else:
-
+            if z(14) <= 0:
                 tte_14day[over_index,index] = np.nan
+            else:
+                tte_14day[over_index,index] = z(14)
+        elif len(x) == 1:
+            tte_14day[over_index,index] = y.values[0]
 
-        except Exception as e:
+        else:
             tte_14day[over_index,index] = np.nan
 
         index += 1
@@ -415,11 +431,8 @@ for i in moneyness:
     over_index += 1
 
 
-def intersect2D(a, b):
-  return np.array([x for x in set(tuple(x) for x in a) & set(tuple(x) for x in b)])
-
 IVs = tte_14day
-
+np.savetxt("conf.csv",IVs,delimiter =",")
 IV_rolling_avg = np.ones((IVs.shape))
 IV_rolling_std = np.ones((IVs.shape))
 IV_z = np.ones((IVs.shape))
@@ -435,7 +448,8 @@ for i in range(IVs.shape[0]):
         IV_z[i, j] = ((IVs[i, j] - IV_rolling_avg[i, j]) / std if std > 0 else 0.0)
 
 
-IVs_t5 = np.roll(IVs,-5)
+IVs_t5 = np.roll(IVs,-5,axis = 1)
+IVs_t5[:, -5:] = np.nan
 
 intercepts = np.ones((IVs.shape))
 slopes = np.ones((IVs.shape))
@@ -477,6 +491,7 @@ for i in range(IVs.shape[0]):
             #print("Long-run mean IV:", theta)
         else:
             thetas[i,j] = (np.nan)
+            kappas[i,j] = np.nan
             #print("Coefficients do not imply positive OU mean reversion")
 
 model_IVs_t5 = np.array(model_IVs_t5)
@@ -485,304 +500,359 @@ epsilon = IVs_t5-model_IVs_t5
 
 epsilon_mean = np.zeros((epsilon.shape))
 
-distance = np.ones((IVs.shape))
-move = np.ones((IVs.shape))
-half_life = np.ones((IVs.shape))
+distance = np.full(IVs.shape, np.nan)
+move = np.full(IVs.shape, np.nan)
+half_life = np.full(IVs.shape, np.nan)
 
 for i in range(IVs.shape[1]):
 
     for j in range(IVs.shape[0]):
+        start = max(0, i - 100)
+        window = epsilon[j, start:i+1]
+        valid = window[~np.isnan(window)]
 
+        if len(valid) < 2 or np.isnan(epsilon[j, i]):
+            epsilon_mean[j, i] = np.nan
+            std = IV_rolling_std[j,i]
+            distance[j, i] = ((IVs[j, i] - thetas[j,i]) / std if std > 0 else 0.0)
+            move[j,i] = np.nan if np.isnan(thetas[j,i]) else (1-slopes[j, i])*(thetas[j,i] - IVs[j,i])
+            half_life[j,i] = np.log(2)/kappas[j,i]
+            continue
 
-        std = np.nanstd(epsilon[j,np.max([0,i-100]):i+1])
-        if np.isclose(std,0):
-            epsilon_mean[j,i] = np.nan
+        std = valid.std()
+        if np.isclose(std, 0):
+            epsilon_mean[j, i] = np.nan
         else:
-            epsilon_mean[j,i] = (epsilon[j,i] - np.nanmean(epsilon[j,np.max([0,i-100]):i+1]))/(std)
+            epsilon_mean[j, i] = (epsilon[j, i] - valid.mean()) / std
 
 
         std = IV_rolling_std[j,i]
         distance[j, i] = ((IVs[j, i] - thetas[j,i]) / std if std > 0 else 0.0)
-        move[j,i] = np.nan if np.isnan(thetas[j,i]) else (1-IVs[j, i])*(thetas[j,i] - IVs[j,i])
+        move[j,i] = np.nan if np.isnan(thetas[j,i]) else (1-slopes[j, i])*(thetas[j,i] - IVs[j,i])
         half_life[j,i] = np.log(2)/kappas[j,i]
 
 epsilon_mean = np.roll(epsilon_mean,5)
-epsilon = np.roll(epsilon,-5)
+epsilon = np.roll(epsilon,5,axis = 1)
+epsilon[:, :5] = np.nan
 
 date_moneyness_2d = np.array(np.ones((IVs.shape[1],IVs.shape[0],2)), dtype = str)
-dates = pd.Series(calls.sort_values(by = ["Expiration"])["Expiration"]).unique()
-moneyness = pd.Series(calls["Rel Price"].round(3)).unique()[1:-1]
+
 for i in range(len(date_moneyness_2d)):
 
     date_moneyness_2d[i,:,:] = [x for x in zip([dates[i] for _ in range(len(moneyness))],moneyness)]
 
 
-portfolio = []
-days  = []
-y = "2026-11-01"
-count = 0
+col_names =  [ 'IVz', 'D', 'eps',"half"]
+params = pd.DataFrame(columns = col_names)
 
-no_weekends = 0
-while pd.Timestamp(y)-timedelta(days = count) > pd.Timestamp("2024-10-07"):
-    
-    if not(dayoftheweek(pd.Timestamp(y)-timedelta(days = count)) in [6,7]):
-        portfolio.append(np.float64(0))
-        days.append(pd.Timestamp(pd.Timestamp(y)-timedelta(days = count)))
+counts = {
+    "zvalid": 0,
+    "hvalid": 0,
+    "dvalid": 0,
+    "mvalid": 0,
+    "cvalid": 0,
+    "5valid": 0,
+    "vega_positive": 0,
+    "half_positive": 0,
+    "iv_positive": 0,
+    "distance_positive": 0,
+    "mu_pass": 0,
+    "large_z_pass": 0,
+    "both_pass": 0,
+    "exit_found": 0
+}
 
-    count += 1
-days.reverse()
-pfolio = pd.DataFrame({"value":portfolio,"day":days})
-pfolio = pfolio.set_index('day')
 
-print()
-print()
+calls["Created"] = pd.to_datetime(calls["Created"])
+days = pd.Series(calls.sort_values(by = ["Created"])["Created"]).unique()
+portfolio = pd.DataFrame({"value":[0.0 for _ in days],"day":days})
+portfolio = portfolio.set_index('day')
 
-def losses(z,weights = True):
+calls = calls.copy()
+calls["Created"] = pd.to_datetime(calls["Created"])
+calls["Expiration"] = pd.to_datetime(calls["Expiration"])
+calls["rel_r"] = calls["Rel Price"].round(5)
 
-    folio = pfolio.copy()
-    s1 = np.argwhere((z[0] < IV_z) & (IV_z < z[1]))
-    s2 = np.argwhere((z[2] < distance) & (distance < z[3]))
-    s3 = np.argwhere((z[4] < epsilon) & (epsilon < z[5]))
-    s4 = (np.argwhere(move < 0))
-    s5 = np.argwhere((z[6] < half_life) & (half_life < z[7]))
+Calls = Calls.copy()
+Calls["Created"] = pd.to_datetime(Calls["Created"])
+Calls["Expiration"] = pd.to_datetime(Calls["Expiration"])
+Calls["strike_f"] = Calls["Strike"].astype(float)
+Calls["strike_r"] = Calls["strike_f"].round(3)
+Calls["tte_r"] = Calls["TTE(years)"].round(0)
 
-    indices = intersect2D(intersect2D(intersect2D(intersect2D(s1,s2),s4),s3),s5)
-    
-    date_moneyness_signal = []
-    p = []
-    l = []
+idx_entry = calls.groupby(["Created", "rel_r"]).indices
+idx_entry1 = calls.groupby(["Expiration", "rel_r"]).indices
+idx_t5    = Calls.groupby(["strike_f", "Expiration", "tte_r"]).indices
+idx_path  = Calls.groupby(["Expiration", "strike_r", "Created", "TTE(years)"]).indices
+
+def lookup(frame, index, key):
+    pos = index.get(key)
+    return frame.iloc[pos] if pos is not None else frame.iloc[0:0]
+
+trades = 0
+for x in range(len(moneyness)):
     counter = 0
     bullets = ["",".","..","...","....",".....","......","........",".........","..........."]
-    for i in indices:
+
+    for y in range(len(dates)):
+        if y < 14 or y < len(dates)/3: #used for training
+            continue
         print("\r Working"+bullets[counter%10],end = "")
         counter += 1
-        x = i[0]
-        y = i[1]
-        if pd.Timestamp(dates[y]) < pd.Timestamp("2024-10-07") or pd.Timestamp(dates[y]) > pd.Timestamp("2026-10-25"):
+        m = moneyness[x]
+        t = dates[y]
+
+        #Function
+        ivz = IV_z[x,y]
+        eps = epsilon[x,y]
+        d = distance[x,y]
+        change = move[x,y]
+        half = half_life[x,y]
+        iv = IVs[x,y]
+
+        result = 0
+        result2 = 0
+        dS = 0
+        Change = 0
+        exp = 0
+        
+        if np.isnan(ivz):    counts["zvalid"] += 1
+        if np.isnan(half):   counts["hvalid"] += 1
+        if np.isnan(d):      counts["dvalid"] += 1
+        if np.isnan(m):      counts["mvalid"] += 1
+        if np.isnan(change): counts["cvalid"] += 1
+
+
+        #Result
+
+        df1 = lookup(calls, idx_entry1, (pd.Timestamp(t), float(round(m,3))))
+        df = lookup(calls, idx_entry, (pd.Timestamp(t) - timedelta(days=14), float(round(m,3))))
+        if df.empty:
             continue
-        date_moneyness_signal.append(date_moneyness_2d[y,x,:])
-        df = calls[(calls["Expiration"] == date_moneyness_2d[y,x,0]) & (calls["Rel Price"].round(3) == float(date_moneyness_2d[y,x,1]))]
+        trade = pd.Series([])
 
+        ttes = (df["TTE(years)"]).to_list()
         test = 14
-        u_counter = 1
-        while df[df["TTE(years)"] == test+u_counter].empty and test+u_counter < 21:
+        u_counter = 0
+        while test+u_counter not in ttes and test+u_counter < 21:
             u_counter += 1
-        o_counter = 1
-        while df[df["TTE(years)"] == test-o_counter].empty and test-o_counter > 7:
+        o_counter = 0
+        while test-o_counter not in ttes and test-o_counter > 7:
             o_counter += 1
-
         winner = "up" if u_counter < o_counter else "down"
         if winner == "up":
             trade = df[df["TTE(years)"] == test+u_counter]
         else:
             trade = df[df["TTE(years)"] == test-o_counter]
 
+        
+        if trade.empty:
+            print("empty")
+            continue
 
-        trade_t5 = calls[(calls["Strike"].astype(float) == float(trade["Strike"].values[0])) & (calls["Expiration"] == date_moneyness_2d[y,x,0]) & ((calls["TTE(years)"]).round(0) == trade["TTE(years)"].values[0]-5)]
-        if not(trade_t5.empty):
-            days = 0
+        vega = trade["vega"].values[0]
+        vega_signal = (vega-0.2)/0.5 if (vega-0.2)/0.5 > 0 else 0
+        half_signal = (-half+6)/5 if (-half+6)/5 < 1.1 else 0
+        distance_signal = (d/3) if d/3 > 0 else 2 * d/3
+        iv_signal = (ivz/3) if ivz/3 > 0 else 2 * ivz/3
 
-            volume  = np.min([5,trade["bVolume"].values[0]])
-            result = trade["Bid"].values[0] * volume - trade_t5["Ask"].values[0] * volume + (trade_t5["Initial"].values[0] - trade["Initial"].values[0]) * trade["d1"].values[0] * volume * 100
-            delta = trade["d1"].values[0]
-            add = 0
+        if return_momementum[int(y-trade["TTE(years)"].values[0])] < -1.5:        momentum = 0.9
+        if -1 > return_momementum[int(y-trade["TTE(years)"].values[0])] > -1.5:   momentum = 0.75
+        if -0.4>return_momementum[int(y-trade["TTE(years)"].values[0])] > -1:     momentum = 0.3  
+        if return_momementum[int(y-trade["TTE(years)"].values[0])] > -.4:         momentum = 0.1
+        
+        if iv_signal > 1.5:
+            iv_signal = -np.abs(iv_signal-3)
+        if distance_signal > 1.5:
+            distance_signal = -np.abs(distance_signal-3)
+        
+        rho = 0.85
+        corr  = distance_signal * rho + np.sqrt(1-rho**2) * half_signal
+        mu = np.mean(np.array([iv_signal*2/3,corr*2/3,momentum*4/3]))
+        large_z = (iv_signal + distance_signal) > 1.2
 
-            while days < 4:
+
+        if mu < 0.6:    counts["mu_pass"] += 1
+        if large_z:     counts["large_z_pass"] += 1
+        if vega_signal <= 0:    counts["vega_positive"] += 1
+        if half_signal <= 0:    counts["half_positive"] += 1
+        if distance_signal<= 0: counts["distance_positive"] += 1
+        if iv_signal <= 0:      counts["iv_positive"] += 1
+
+        
+        trade_t5 = pd.Series([])
+        hedge_pnl = []
+
+        ivs = IVs[x,y-3:y+1]
+        max_iv = np.max(ivs)
+
+        turning_coeff = 0.9
+        turning = iv < turning_coeff* max_iv
+        if mu > 0.2 and turning:#return_momementum[int(y-trade["TTE(years)"].values[0])] < 0:
+            #print(trade)
+            trades+=1
+            result = np.nan
+            if not(trade.empty):
+                exp_date = pd.Timestamp(trade["Expiration"].values[0])    
+                strike = float(trade["Strike"].values[0])
+                tte0 = trade["TTE(years)"].values[0]
+
+                shift = 5
+                trade_t5 = lookup(Calls, idx_t5, (strike, exp_date, tte0 - shift))
+                while trade_t5.empty and shift < 9:          
+                    shift += 1
+                    trade_t5 = lookup(Calls, idx_t5, (strike, exp_date, tte0 - shift))
                 
-                evolution = Calls[(Calls["Expiration"] == date_moneyness_2d[y,x,0]) & (Calls["Strike"].round(3) == trade["Strike"].values[0].round(3))& (pd.to_datetime(Calls["Created"]) == pd.to_datetime(trade["Created"]).values[0] + timedelta(days = days+add)) & ((Calls["TTE(years)"]*365).round(0) == trade["TTE(years)"].values[0]-(days+add))]
-                evolution["TTE(years)"] *= 365
-
-                if evolution.empty:
-                    add+=1
-                    if add > 9:
-                        break
-
-                    continue
-   
-                index = pd.to_datetime(evolution["Created"].values[0]) - timedelta(days = 0)
-
-                folio.loc[index] += -evolution["Ask"].values[0]*volume
-                folio.loc[index] += evolution["Initial"].values[0]*delta*volume
-                folio.loc[index] += trade["Bid"].values[0]*volume
-                folio.loc[index] += -trade["Initial"].values[0]*delta*volume
-                days+=1
-                last_index = index
-
-            for a in folio.index:
-                if a > last_index:
-                    folio.loc[a] += result
-
-            if result > 0:
-                p.append(result)
-                #print(kappas[x,y],"win")
-            if result < 0:
-                l.append(result)
-                #print(kappas[x,y],"loss")
-        #print(i)
-        #print(result)
+            if not(trade_t5.empty):
+                #print(trade,trade_t5)
+                volume  = 100*np.min([10,trade["bVolume"].values[0]])
+                result = trade["Bid"].values[0] * volume - trade_t5["Ask"].values[0] * volume 
+                result2 = (trade_t5["Initial"].values[0] - trade["Initial"].values[0]) * trade["d1"].values[0] * volume 
+                total = result+result2
+                dS = (trade_t5["Initial"].values[0] - trade["Initial"].values[0])
 
 
-            
-    if weights == True:
-        w1,w2 = (1,3)
-    else:
-        w1,w2 = (1,1)
-        print()
-        print(f"Loss value {np.sum(l):.2f}, number of losing trades {len(l)}")
-        print(f"Profit value {np.sum(p):.2f}, number of winning trades {len(p)}")
-        print(f"Ratio of losing trades {len(l)/(len(l)+len(p))}")
-        print(f"Number of trades {len(l)+len(p)}")
-    return ((w1 * np.sum(p) + w2 * np.sum(l)),folio)
+                delta = trade["d1"].values[0]
+                days = 0
+                add = 0
+                signal_date = trade["Expiration"].values[0]
+                prev = trade
+                hedge_pnl = []
+                while  days + add <= shift:
+                    evolution = lookup(Calls, idx_path,
+                                (signal_date, trade["Strike"].values[0],
+                                 trade["Created"].values[0] + timedelta(days=(days+add)), 
+                                 trade["TTE(years)"].values[0] - (days+add)))
+                    #evolution = Calls[(Calls["Expiration"] == signal_date) & (Calls["Strike"].round(3) == trade["Strike"].values[0].round(3))& (pd.to_datetime(Calls["Created"]) == pd.to_datetime(trade["Created"]).values[0] + timedelta(days = days+add)) & ((Calls["TTE(years)"]) == trade["TTE(years)"].values[0]-(days+add))]
+                    if evolution.empty:
+                        add+=1
+                        if add > 9:
+                            break
+                        continue
 
-train = calls[pd.to_datetime(calls["Expiration"]).dt.normalize() < pd.Timestamp("2024-10-07")].copy()
+                    option_value = trade["Bid"].values[0] * volume - evolution["Ask"].values[0] * volume 
+                    prev_shares = prev["d1"].values[0]*volume
+                    deltaS = evolution["Initial"].values[0] - prev["Initial"].values[0]
+                    stock_value = prev_shares * deltaS
 
+                    hedge_pnl.append(stock_value)
+                    prev = evolution
+                    days+=1  
+                    
+                    index = pd.Timestamp(pd.to_datetime(evolution["Created"].values[0]))
 
-z1 = [ 1.47515754,  2.90179831,  0.4661562,   4.2971716,  -0.20669647,  1.29084686] # try1
-z2 = [ 1.27807456,  4.16766731,  1.60401758,  4.7227877,  -0.34539528,  1.40682094] #full try2
-z3 =[ 2.03358897,  2.72279683,  0.78085089,  3.22958016, -0.5909661,   3.13362539] # weighted try3
-z4 = [1.01652649, 3.78785348, 0.52344026, 2.51197941, 0.00917258, 1.24904451] #try 4 weighted and minimal
+                    portfolio.loc[index] += option_value
+                    portfolio.loc[index] += sum(hedge_pnl)
 
-z5 = [ 1.84663146,  2.51114088,  0.64511321,  2.15299062, -1.43427245,  0.89304972] #try 5 trained early weighted and minimal
-z6 = [1.81890754,  2.50463034,  0.24497942,  2.68233176, -2.48977968,  1.89139202] # testing of params increasing in number weight follow below
-z7 = [ 1.82493208,  2.46584362,  0.66901834,  2.88377333, -1.90288626,  2.35315839]
-z8 = [ 1.83308374,  2.35854441,  0.83153633,  4.97620755, -1.02756051,  1.43137493]
-z9 = [ 1.83602839,  3.69698885,  0.09768046,  2.13688028, -0.06249926,  0.78258908]
-z10 = [1.82890239,  2.08294328,  0.29800668,  2.1520985,  -2.23436803,  0.99544411]
+                    last_index = index
 
+                for a in portfolio.index:
+                    if a > last_index:
+                        portfolio.loc[a] += result+sum(hedge_pnl)
 
-z11 = [ 1.84471616,  2.26367286,  1.25858919,  3.83635251, -0.04167325,  3.36858114,0.75433959,  3.37081815] # final params value
-z12 = [ 1.63294105,  2.41734377,  0.72374093,  3.38157722, -1.51984944, 3.60349046,
-  0.75433959,  3.37081815]
-for i in [z11,z12]:
-    m_return,pfolio = losses(i,weights=False)
-    #[print(i) for i in pfolio["value"]]
-    print(m_return)
+                exp = ((-trade_t5["IV"].values[0]+trade["IV"].values[0])*trade["vega"].values[0]*volume*100)
+                Change = -trade_t5["IV"].values[0]+trade["IV"].values[0]
 
-    array = np.array(pfolio)
-
-
-    min = 0
-    max = 0
-    drawdown = []
-    for i in range(len(array)):
-
-        if array[i] < min:
-            min = array[i]
-        if array[i] > max:
-            drawdown.append(max - min)
-            max = array[i]
-            min = max
+            if trade_t5.empty:
+                trade_t5 = lookup(Calls, idx_t5,
+                                              (float(trade["Strike"].values[0]),
+                                               pd.Timestamp(date_moneyness_2d[y, x, 0]),
+                                               trade["TTE(years)"].values[0] - shift))
+                print(trade_t5)
+                print(shift)
+                counts["exit_found"]+=1
             
 
+        
+        pnl = result
+        pnl2 = sum(hedge_pnl)
+        output = IVs_t5[x,y] 
+        #"S0" : trade["Ask"].values[0],"S5": trade_t5["Bid"].values[0],
+        new_row = pd.DataFrame({"Date": [trade["Created"].values[0]], 
+                                'eps':[eps],"half":[half],
+                                "vega":[trade["vega"].values[0]],
+                                "RV":trade["RV"].values[0],
+                                "dS":dS,
+                                "Gamma" : trade["Gamma"].values[0],
+                                'IV':[trade["IV"].values[0]],
+                                'IVz':[ivz],
+                                'D':[d],
+                                "reutrnm1":return_momementum[int(y-trade["TTE(years)"].values[0])],
+                                "returnm":return_momementum[int(y-trade["TTE(years)"].values[0])],
+                                "returnz":return_z[int(y-trade["TTE(years)"].values[0])],
+                                "Output":[-1*(Change-trade["IV"].values[0])],
+                                "change" : change,
+                                "Change":Change,
+                                "exp" :exp,
+                                "mu":mu,
+                                "PnL":round((pnl+pnl2),0)})
+        
+        params = pd.concat([params,new_row], ignore_index=True)
+print()
+params = params[params["PnL"] != 0.0]
+pd.set_option('display.max_columns', None) 
+pd.set_option('display.max_rows', None)
+print("Unique Trades(day):",params['Date'].nunique())
+print(params['Date'].value_counts())
+print()
+print("Number of trades:", len(params),trades)
+print("Average P&L:", params["PnL"].dropna().mean())
+print("Win rate:", (params["PnL"].dropna() > 0).mean())
+print("Gross profit:", params.loc[params["PnL"] > 0, "PnL"].sum())
+print("Gross loss:", params.loc[params["PnL"] < 0, "PnL"].sum())
+print(params["PnL"].sum())
+params.to_csv("what.csv")
+print("Total observations:", IVs.size)
+v = portfolio["value"].diff().dropna()
+
+nv = np.array(v)
+nv = np.sqrt(np.sum(nv[nv < 0]**2) / len(v))
+
+sortini = np.sqrt(252) * v.mean()/nv
+
+sharpe = v.mean()/v.std()
+
+ratio = np.sqrt(252) * sharpe
+
+def max_dd(ser):
+    max2here = ser.expanding().max()
+    dd2here = ser - max2here
+    return dd2here.min()
+
+print("Max Drawdown:",max_dd(portfolio["value"]))
+
+print()
+print("Sharpe ratio:" ,ratio)
+
+print("Sortini ratio",sortini)
+print()
 
 
-    v = pfolio["value"].diff().dropna()
-
-    nv = np.array(v)
-    nv = np.sqrt(np.sum(nv[nv < 0]**2) / len(v))
-
-    sortini = np.sqrt(252) * v.mean()/nv
-
-    sharpe = v.mean()/v.std()
-
-    ratio = np.sqrt(252) * sharpe
-    print()
-    print("Sharpe ratio:" ,ratio)
-    print("Max drawdown:",np.max(drawdown))
-    print("Sortini ratio",sortini)
-    print()
-
-exit()
+#print(portfolio)
 
 
 
 
+# Triaing period to find mu -> Mu found based on least loss and maximum profit usually mu above a loss streak
+m_range = params["mu"].max() - params["mu"].min()
+nbins = 20
+#bins = [params["mu"].min() +m_range* i/nbins for i in range(0,nbins+1)]
+bins = [0 +0.7* i/nbins for i in range(0,nbins+1)]
+#print(bins)
+labels = [i for i in range(nbins)]
 
+df = pd.DataFrame(params[["PnL","mu"]],columns=['PnL',"mu"])
 
-
-#--------------------------------------------------------------
-#Differential evolution training
-
-
-
-def objective(z):
-    z1_low, z1_high, z2_low, z2_high, z3_low, z3_high,z4_low,z4_high = z
-    pnl = []
-    neg = []
-    if not (z1_low < z1_high and
-            z2_low < z2_high and
-            z3_low < z3_high and 
-            z4_low < z4_high):
-        return 1e6
-
-    mask = (
-        (z[0] < IV_z) & (IV_z < z[1]) &
-        (z[2] < distance) & (distance < z[3]) &
-        (z[4] < epsilon) & (epsilon < z[5]) &
-        (z[6] < half_life) & (half_life < z[7]) & 
-        (move < 0)
-    )
-
-    indices = np.argwhere(mask)
-    for x, y in indices:
-        signal_date = dates[y]
-        if pd.Timestamp(dates[y]) > pd.Timestamp("2024-10-07"):
-            continue
-        signal_moneyness = moneyness[x]
-
-        df = train[(train["Expiration"] == signal_date) & (train["Rel Price"].round(3) == float(signal_moneyness))]
-        test = 14
-        u_counter = 1
-        while df[df["TTE(years)"] == test+u_counter].empty and test+u_counter < 21:
-            u_counter += 1
-        o_counter = 1
-        while df[df["TTE(years)"] == test-o_counter].empty and test-o_counter > 7:
-            o_counter += 1
-
-        winner = "up" if u_counter < o_counter else "down"
-        if winner == "up":
-            trade = df[df["TTE(years)"] == test+u_counter]
-        else:
-            trade = df[df["TTE(years)"] == test-o_counter]
-
-
-        trade_t5 = train[(train["Strike"].astype(float) == float(trade["Strike"].values[0])) & (train["Expiration"] == date_moneyness_2d[y,x,0]) & ((train["TTE(years)"]) == trade["TTE(years)"].values[0]-5)]
-        if not(trade_t5.empty):
-            
-            volume  = np.min([100,trade["bVolume"].values[0]])
-            result = trade["Bid"].values[0] * volume - trade_t5["Ask"].values[0] * volume + (trade_t5["Initial"].values[0] - trade["Initial"].values[0]) * trade["d1"].values[0] * volume
-
-            if result < 0:
-                pnl.append(result*2)
-                neg.append(result)
-            pnl.append(result)
-
-
-    if len(pnl) < 30:
-        return 1e6
-
-    return -np.sum(pnl) + 40 * len(neg)
-
-bounds = [
-    (1, 4), (1, 5),       # IV_z lower and upper
-    (0, 3), (1, 5),       # distance lower and upper
-    (-3, 2), (-1, 4),      # historical epsilon Z-score bounds
-    (0,1),(0,5)
-]
-def show_progress(xk,b):
-    print("Current x:", xk,b)
-res = differential_evolution(
-    objective,
-    bounds,
-    popsize=15,
-    maxiter=300,
-    seed=42,
-    polish=False,
-    callback = show_progress
+df['bins'] = pd.cut(df["mu"], bins)
+grouping = df.groupby("bins", observed=True).agg(
+    n=("PnL", "size"),          
+    traded=("PnL", "count"),    
+    total=("PnL", "sum"),
+    mean=("PnL", "mean"),
+    win_rate=("PnL", lambda s: (s.dropna() > 0).mean()),
 )
+s = df.groupby(pd.cut(df['mu'], bins=bins)).size()
+print(grouping)
 
-print("Optimal thresholds:", res.x)
-print("Training average P&L:", -res.fun)
-print(losses(res.x,weights = False))
-
-    
+#plt.plot(grouping["PnL"].to_numpy())
+#plt.show()
